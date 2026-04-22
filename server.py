@@ -49,6 +49,39 @@ _bm25: Optional[object] = None
 _docs: list[dict]       = []
 _loaded                 = False
 
+def _clean_text(text: str) -> str:
+    """Normalise text scraped from TradingView SPA.
+
+    The Playwright scraper captures non-breaking spaces (U+00A0), middle dots,
+    and other Unicode artefacts from the rendered DOM.  Replace them with ASCII
+    equivalents so MCP output is clean for any downstream LLM or application.
+    """
+    # Non-breaking space → regular space
+    text = text.replace("\u00a0", " ")
+    # Middle dot / interpunct used as space separator in TradingView code blocks
+    text = text.replace("\u00b7", " ")
+    # Thin space
+    text = text.replace("\u2009", " ")
+    # Pine Script trademark symbol — keep as plain text
+    text = text.replace("\u2122", "(TM)")
+    # Registered trademark
+    text = text.replace("\u00ae", "(R)")
+    # Arrow characters → ASCII equivalents
+    text = text.replace("\u2192", "->")
+    text = text.replace("\u2190", "<-")
+    text = text.replace("\u21d2", "=>")
+    # Smart quotes → straight quotes
+    text = text.replace("\u201c", '"').replace("\u201d", '"')
+    text = text.replace("\u2018", "'").replace("\u2019", "'")
+    # En/em dash → hyphen
+    text = text.replace("\u2013", "-").replace("\u2014", "--")
+    # Ellipsis
+    text = text.replace("\u2026", "...")
+    # Collapse runs of spaces
+    text = re.sub(r"  +", " ", text)
+    return text.strip()
+
+
 def _ensure_loaded():
     global _bm25, _docs, _loaded
     if _loaded:
@@ -61,7 +94,18 @@ def _ensure_loaded():
     with open(INDEX_FILE, "rb") as f:
         _bm25 = pickle.load(f)
     with open(DOCS_FILE, "r", encoding="utf-8") as f:
-        _docs = json.load(f)
+        raw = json.load(f)
+
+    # Normalise all text fields in-place
+    for doc in raw:
+        if "text" in doc:
+            doc["text"] = _clean_text(doc["text"])
+        if "title" in doc:
+            doc["title"] = _clean_text(doc["title"])
+        if "code" in doc:
+            doc["code"] = [_clean_text(c) for c in doc["code"]]
+
+    _docs = raw
     _loaded = True
 
 
@@ -120,7 +164,17 @@ def search_pine_docs(query: str, max_results: int = 8) -> str:
     if not tokens:
         return "ERROR: Empty query."
 
-    scores = _bm25.get_scores(tokens)
+    scores = list(_bm25.get_scores(tokens))
+
+    # Boost exact and prefix title matches so e.g. "ta.sma" always surfaces ta.sma
+    query_lower = query.lower().strip()
+    for i, doc in enumerate(_docs):
+        title = doc.get("title", "").lower()
+        if title == query_lower:
+            scores[i] += 1000          # exact title match — always first
+        elif title.startswith(query_lower) or query_lower in title:
+            scores[i] += 50            # partial title match — strong boost
+
     ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
     top    = [(i, s) for i, s in ranked if s > 0][:max_results]
 
@@ -262,7 +316,7 @@ def list_pine_sections() -> str:
         categories.setdefault(cat, [])
         categories[cat].append(f"  - {title}  ({url})")
 
-    lines = [f"Pine Script Documentation Index — {len(_docs)} total documents\n"]
+    lines = [f"Pine Script Documentation Index - {len(_docs)} total documents\n"]
     for cat, items in sorted(categories.items()):
         lines.append(f"\n## {cat} ({len(items)} items)")
         lines.extend(items[:30])
