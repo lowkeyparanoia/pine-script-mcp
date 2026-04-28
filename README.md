@@ -15,10 +15,11 @@ Indexes the complete TradingView Pine Script documentation (User Manual + Refere
 | Tool | Description |
 |------|-------------|
 | `search_pine_docs` | BM25 full-text search across all docs |
+| `search_pine_examples` | Search and return only Pine Script **code examples** — use when writing code |
 | `get_pine_function` | Look up any function/variable by name (e.g. `ta.sma`, `strategy.entry`) |
 | `get_pine_page` | Retrieve a complete docs section (e.g. `concepts/strategies`) |
 | `list_pine_sections` | Browse all indexed content |
-| `pine_quick_ref` | Instant cheat-sheet cards for: `indicators`, `strategy`, `plotting`, `arrays`, `inputs`, `colors`, `operators`, `types`, `time` |
+| `pine_quick_ref` | Instant cheat-sheet cards — 23 topics: `indicators`, `strategy`, `plotting`, `arrays`, `inputs`, `colors`, `operators`, `types`, `time`, `loops`, `functions`, `request`, `alerts`, `drawing`, `limitations`, `matrices`, `maps`, `var_varip`, `na`, `type_qualifiers`, `libraries`, `objects`, `debugging` |
 
 ## Quick Start
 
@@ -61,7 +62,11 @@ claude mcp add pine-docs python /absolute/path/to/pine-script-mcp/server.py
 
 ## Integrate with Claude Desktop
 
-Add to `~/.claude/claude_desktop_config.json`:
+Edit the config file for your OS:
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
 ```json
 {
   "mcpServers": {
