@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pine-script-mcp"
+version = "0.1.0"
+description = "MCP server for TradingView Pine Script documentation — BM25 search, function lookup, code examples, and quick-reference cards"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["mcp", "tradingview", "pine-script", "llm", "documentation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Documentation",
+]
+dependencies = [
+    "fastmcp>=0.4.0",
+    "requests>=2.32.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.2.0",
+    "rank-bm25>=0.2.2",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+playwright = ["playwright>=1.40.0"]
+
+[project.scripts]
+pine-script-mcp = "server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*.py"]

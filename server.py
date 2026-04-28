@@ -4,11 +4,16 @@ server.py - TradingView Pine Script Documentation MCP Server
 FastMCP server that exposes Pine Script docs to any MCP-compatible LLM.
 
 Tools:
-  search_pine_docs   - BM25 search across all indexed documentation
-  get_pine_function  - Look up a specific function or variable by name
-  get_pine_page      - Get full content of a docs page by URL path
-  list_pine_sections - List all indexed sections with their URLs
-  pine_quick_ref     - Get a quick reference card for a Pine Script topic
+  search_pine_docs     - BM25 search across all indexed documentation
+  search_pine_examples - Search and return only Pine Script code examples
+  get_pine_function    - Look up a specific function or variable by name
+  get_pine_page        - Get full content of a docs page by URL path
+  list_pine_sections   - List all indexed sections with their URLs
+  pine_quick_ref       - Get a quick reference card for a Pine Script topic
+                         Topics: indicators, strategy, plotting, arrays, inputs,
+                         colors, operators, types, time, loops, functions, request,
+                         alerts, drawing, limitations, matrices, maps,
+                         var_varip, na, type_qualifiers, libraries, objects, debugging
 
 Usage:
     python server.py          # start MCP server (stdio transport)
@@ -258,11 +263,16 @@ def get_pine_page(section: str) -> str:
 
     section_lower = section.lower().strip().strip("/")
 
-    # Match by URL path
+    # Match by URL path (search all sources, prefer user_manual)
+    url_matches = []
     for doc in _docs:
         url_path = doc.get("url", "").lower()
-        if section_lower in url_path and doc.get("source") == "user_manual":
-            return _format_doc(doc, include_code=True, max_text=5000)
+        if section_lower in url_path:
+            priority = 0 if doc.get("source") == "user_manual" else 1
+            url_matches.append((priority, doc))
+    if url_matches:
+        url_matches.sort(key=lambda x: x[0])
+        return _format_doc(url_matches[0][1], include_code=True, max_text=5000)
 
     # Match by title
     for doc in _docs:
@@ -327,14 +337,98 @@ def list_pine_sections() -> str:
 
 
 @mcp.tool()
+def search_pine_examples(query: str, max_results: int = 6) -> str:
+    """
+    Search Pine Script documentation and return only code examples.
+
+    Use this when you need working Pine Script code snippets rather than
+    explanatory text. Returns actual Pine Script code blocks from the docs.
+
+    Args:
+        query:       What you're looking for. Examples:
+                     "strategy entry stop loss", "plot color condition",
+                     "request.security higher timeframe", "array sort descending",
+                     "alertcondition crossover", "table cell bgcolor"
+        max_results: Max number of code examples to return (default: 6, max: 15)
+
+    Returns:
+        Pine Script code examples from matching documentation sections.
+    """
+    _ensure_loaded()
+    if not _docs:
+        return "ERROR: Index not found. Run: python indexer.py"
+
+    max_results = min(max_results, 15)
+    tokens = _tokenise(query)
+    if not tokens:
+        return "ERROR: Empty query."
+
+    scores = list(_bm25.get_scores(tokens))
+    query_lower = query.lower().strip()
+    for i, doc in enumerate(_docs):
+        title = doc.get("title", "").lower()
+        if title == query_lower:
+            scores[i] += 1000
+        elif query_lower in title or title in query_lower:
+            scores[i] += 50
+        # Boost docs that have code blocks
+        if doc.get("code"):
+            scores[i] += 5
+
+    ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+    # Only docs that actually have code
+    top = [(i, s) for i, s in ranked if s > 0 and _docs[i].get("code")][:max_results]
+
+    if not top:
+        # Fall back to any matching docs even without code
+        top = [(i, s) for i, s in ranked if s > 0][:max_results]
+        if not top:
+            return f"No code examples found for: '{query}'. Try search_pine_docs() instead."
+
+    results = [f"Pine Script code examples for: '{query}'\n{'='*50}\n"]
+    for rank, (idx, score) in enumerate(top, 1):
+        doc = _docs[idx]
+        codes = [c.strip() for c in doc.get("code", []) if c.strip()]
+        if not codes:
+            continue
+        results.append(f"**[{rank}] {doc.get('title', 'Untitled')}**  (URL: {doc.get('url', '')})")
+        for code in codes[:2]:  # max 2 examples per doc
+            results.append(f"```pine\n{code[:600]}\n```")
+        results.append("")
+
+    return "\n".join(results)
+
+
+@mcp.tool()
 def pine_quick_ref(topic: str) -> str:
     """
     Get a Pine Script quick reference card for a topic.
 
     Args:
-        topic: Topic keyword. Examples:
-               "indicators", "strategy", "plotting", "arrays", "inputs",
-               "operators", "time", "types", "loops", "functions", "colors"
+        topic: Topic keyword. Full list of available topics:
+               "indicators"     — ta.sma, ta.rsi, ta.macd, ta.atr, ta.vwap etc.
+               "strategy"       — strategy.entry, strategy.exit, strategy.close
+               "plotting"       — plot, plotshape, plotcandle, bgcolor, hline, fill
+               "arrays"         — array.new, push, pop, sort, sum, avg, slice
+               "inputs"         — input.float, input.int, input.bool, input.source
+               "colors"         — color.new, color.rgb, color.from_gradient
+               "operators"      — arithmetic, comparison, logical, ternary, :=, []
+               "types"          — int, float, bool, string, color, line, array, matrix, map
+               "time"           — time, timenow, year, month, dayofmonth, str.format_time
+               "loops"          — for, for-in, while, break, continue
+               "functions"      — user-defined functions, methods, recursion limits
+               "request"        — request.security, lookahead, gaps, lower_tf
+               "alerts"         — alert(), alertcondition(), template variables
+               "drawing"        — line.new, box.new, label.new, polyline
+               "limitations"    — max_bars_back, object limits, loop limits, plot limits
+               "matrices"       — matrix.new, get, set, transpose, mult, inv
+               "maps"           — map.new, put, get, contains, remove, iterate
+               "var_varip"      — var vs varip persistent variable declarations
+               "na"             — na, nz(), fixnan(), na.new_*(), na type checks
+               "type_qualifiers"— series, simple, input, const — when each is allowed
+               "libraries"      — import, export, library() declaration
+               "objects"        — type keyword, UDTs, method definitions (v5+)
+               "debugging"      — log.info, log.error, label debug patterns
 
     Returns:
         Concise cheat-sheet style reference for the topic.
@@ -763,6 +857,236 @@ map.clear(m)
 
 // Common key types: string, int
 // Common value types: float, int, bool, string, line, label, box, array
+""",
+        "var_varip": """
+## var vs varip — Persistent Variables
+
+// var — initializes ONCE on the first bar, retains value across bars
+var float mySum = 0.0
+mySum += close            // accumulates across all bars
+
+var int count = 0
+if close > open
+    count += 1
+
+var line myLine = na      // hold a drawing object across bars
+
+// varip — initializes ONCE, updates on EVERY tick (including intrabar)
+//         only meaningful in real-time; behaves like var on history
+varip int tickCount = 0
+tickCount += 1            // increments every price tick, not just bar close
+
+// KEY DIFFERENCES:
+// var   → value persists, updated once per bar (on bar close in history)
+// varip → value persists, updated every real-time tick
+// Neither var nor varip resets on each bar like a regular variable
+
+// Common patterns:
+var float highestClose = 0.0
+highestClose := math.max(highestClose, close)   // running maximum
+
+var bool triggered = false
+if not triggered and close > 100.0
+    triggered := true     // set once, never reset
+""",
+        "na": """
+## na — Missing Values
+
+// Check for na
+na(value)                 // true if value is na
+not na(value)             // true if value has a real value
+
+// Replace na
+nz(value)                 // replace na with 0
+nz(value, replacement)    // replace na with custom value: nz(close[1], close)
+
+// Fix nan (different from na — rare but possible)
+fixnan(value)             // replace NaN with previous non-NaN value
+
+// Generate na of a specific type
+float myVar = na          // na float
+int myInt = na            // na int
+line myLine = na          // na line (before first draw)
+
+// na in series context
+close[1]                  // previous close — is na on first bar
+ta.sma(close, 20)         // is na for first 19 bars
+
+// Propagation: any arithmetic with na returns na
+// na + 1 = na, na * 2 = na
+
+// COMMON PATTERN: skip computation until warmed up
+if not na(ta.sma(close, 200))
+    // safe to use — 200 bars of history available
+
+// na in conditions
+isUp = close > open       // if close or open is na, result is na (not false!)
+// Use: if not na(close) and close > open
+
+// array / matrix na
+arr = array.new<float>(5, na)    // array of 5 na floats
+""",
+        "type_qualifiers": """
+## Type Qualifiers — series, simple, input, const
+
+// Pine Script has 4 qualifiers that restrict WHEN a value is known:
+
+// const — known at compile time (hardcoded literals)
+//   Cannot depend on bar data, inputs, or calculations
+const int MAX = 100
+const string MSG = "hello"
+//   Required by: indicator() title, overlay param, max_bars_back
+
+// input — known after user sets inputs, before bar execution
+//   Can depend on input.* calls, but not bar data
+//   Required by: request.security timeframe argument
+
+// simple — known on bar 0, does not change bar-to-bar
+//   Example: syminfo.ticker, timeframe.period
+//   Cannot depend on bar-varying calculations
+
+// series — can change on every bar (DEFAULT for most values)
+//   close, high, ta.sma(), etc. are all series
+//   Most flexible — works everywhere
+
+// QUALIFIER HIERARCHY (most to least restrictive):
+//   const > input > simple > series
+
+// COMMON ERRORS caused by qualifier mismatch:
+//   "Cannot use 'series bool' where 'simple bool' is expected"
+//     → Happens when passing a calculated bool to a function that needs simple
+//     → Fix: use a literal or pre-calculate with var
+
+//   "Cannot use 'series string' where 'const string' is expected"
+//     → Happens with indicator(title=someVariable)
+//     → Fix: use a string literal
+
+// Explicit casting (rarely needed):
+int(floatValue)           // cast float series to int series
+float(intValue)
+str.tostring(value)
+""",
+        "libraries": """
+## Pine Script Libraries (v5+)
+
+// CREATING a library (separate Pine Script file):
+//@version=5
+library("MyLibrary", overlay=true)
+
+// Export a function from a library:
+export myFunc(float source, int length) =>
+    ta.sma(source, length)
+
+// Export a type:
+export type MyPoint
+    float x
+    float y
+
+// IMPORTING a library:
+//@version=5
+indicator("My Script")
+
+import username/LibraryName/1 as lib
+
+// Use the imported function:
+result = lib.myFunc(close, 14)
+
+// Re-export (expose imported functions from your library):
+import username/LibraryName/1 as lib
+export myWrapper(float src) =>
+    lib.myFunc(src, 14)
+
+// KEY RULES:
+// - Library scripts use library() not indicator() or strategy()
+// - Exported functions must have explicit parameter types
+// - Version number in import must match published version
+// - Libraries are published to TradingView's public/private library list
+// - Max 40 imports per script (same limit as request.security)
+// - Libraries cannot call request.security directly (use wrappers)
+""",
+        "objects": """
+## User-Defined Types (UDTs) and Objects (v5+)
+
+// DEFINE a type:
+type Point
+    float x = 0.0        // field with default value
+    float y = 0.0
+    string label = ""
+
+// CREATE an instance:
+p = Point.new()          // uses defaults
+p2 = Point.new(x=3.0, y=4.0, label="origin")
+
+// ACCESS fields:
+p.x := 10.0              // set field
+dist = p.x + p.y         // read field
+
+// METHODS on UDTs:
+Point.toString(this) =>
+    "(" + str.tostring(this.x) + ", " + str.tostring(this.y) + ")"
+
+p.toString()             // call method
+
+// ARRAYS of objects:
+var points = array.new<Point>()
+array.push(points, Point.new(close, bar_index))
+
+// NESTED types:
+type Candle
+    float o = open
+    float h = high
+    float l = low
+    float c = close
+    Point pivot = na     // nested UDT — must be na or Point.new()
+
+// var with UDTs:
+var Point lastHigh = na
+if high == ta.highest(high, 20)
+    lastHigh := Point.new(x=bar_index, y=high)
+
+// COPY (shallow):
+p3 = p.copy()            // creates new instance with same field values
+""",
+        "debugging": """
+## Debugging Pine Script
+
+// log.*() — writes to the Pine Script Console (TradingView Editor → Console tab)
+log.info("close={0}, bar={1}", close, bar_index)
+log.warning("RSI overbought: {0}", rsiValue)
+log.error("Unexpected na value at bar {0}", bar_index)
+
+// Only logs on real-time bars + last ~50 historical bars
+// Format: log.info(formatString, arg0, arg1, ...)
+
+// Label-based debugging (visible on chart):
+if barstate.islast
+    label.new(bar_index, high,
+              "close=" + str.tostring(close) + "\\nRSI=" + str.tostring(rsiValue),
+              style=label.style_label_down,
+              color=color.yellow,
+              textcolor=color.black)
+
+// Plot a value to inspect it:
+plot(rsiValue, "Debug RSI", color=color.orange)
+
+// Check na values:
+plotshape(na(ta.sma(close, 200)), "SMA na", shape.xcross, location.top, color.red)
+
+// barstate flags for targeted logging:
+if barstate.islast
+    // runs only on the most recent bar
+if barstate.isconfirmed
+    // runs only when bar closes (not on every tick)
+
+// Conditional breakpoints (approximate):
+if bar_index == 100
+    label.new(bar_index, close, "bar 100: close=" + str.tostring(close))
+
+// COMMON PITFALLS:
+// 1. Variable is na for first N bars — check not na() before using
+// 2. Wrong scope — variable declared inside if block has local scope
+// 3. Series vs simple mismatch — see type_qualifiers
+// 4. Max bars back exceeded — add max_bars_back=500 to indicator()
 """,
     }
 
